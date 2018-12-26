@@ -1,0 +1,255 @@
+Our goal in this project is to have the car drive on highway using path plannin methods to find best available paths 
+accordin to the cost function used while respecting pyhiscs and surrounding/environment and law. 
+minimizing jerk, velocity and not crashing or rollin over. 
+
+First we define our states which we will plan upon. 
+ // make car states to control motion based on sensor fusion readings
+          	bool keep_lane = true; // can keep driving on same lane
+          	bool right_lane_change = true; // can shift lane to right
+          	bool left_lane_change = true;  // can shift lane to left
+            
+            these states indicate our possible behaviours, stay on lane, shift one lane to right, or shift one lane to left. They are 				booleans, indicating on/off(true/false) conditions.
+
+Next, we have to define car's physics and limits. 
+it has to drive in center lane as much as possible, it can not go past 50mph. jerk has to be minimum thus acceleration
+should be limited/stricted to some extent. 
+// set car constraints - Acceleration and Max speed
+          	double acc = 0.224;
+          	double max_vel = 49.5;
+            int car_lane = 1 ;
+  			double ref_vel = 0;
+            
+            
+Now we check for previous paths thus if we find any, we just use and continue/work up from there. because it is always easier than doin new one. however, is not always possible to have previous paths available thus we should consider for both situations
+ 			// if previous path exists, follow up 
+          	double prev_path_size = previous_path_x.size();
+          	if(prev_path_size > 0){car_s = end_path_s;}
+            
+            
+            
+Car should be aware of it's surroundings and environment for proper plannin, thus we make use of sensor_fusion and estimates accordingly 
+		for(unsigned int i = 0; i < sensor_fusion.size(); i++)
+            {
+              float d = sensor_fusion[i][6];
+              if(d > 0 && d < 4){check_car_lane = 0;} // right lane
+              else if(d > 4 && d < 8){check_car_lane = 1;} // center lane
+              else if(d > 8 && d < 12){check_car_lane = 2;} // left lane
+              else
+              {check_car_lane = -1; continue;}
+              
+              // takes in reading for each object in the sensor_fusion readings
+              double vx = sensor_fusion[i][3]; // X-coordinate Velocity
+              double vy = sensor_fusion[i][4]; // Y-coordinate Velocity
+              double check_speed = sqrt(vx*vx + vy*vy); // Magnitude of Velocity Vector
+              double check_car_s = sensor_fusion[i][5]; // Car Position
+              check_car_s = check_car_s +  (prev_path_size*0.02*check_speed); // Predicts Car Position in Future every 0.02
+              
+              we iterate over every sensor_fusion reading, each reading indicating a different object. 
+              since our whole road sums up to 24 meters, we only going in one direction. thus we only consider 3 lanes, in our heading
+              each lane is 4 meters wide. 
+              marking them from very far right to very far left. resulting in labelin them as follows:
+              right lane : 0 this will take up first 4 meters 0-4
+              center lane : 1 takes up second 4 meters, 4-8
+              left lane : 2 takes up third 4 meters, 8-12
+              so, if a car, with same heading, has a d-coordinate(fernet) between 0-12, we know which lane is it in now. 
+              next we store the senor_fusion state, Velocity on both X-Y Coordinates, Magnitude of Velocity Vector and predict
+              the location of car in future every 0.02 second. 
+              
+we have defined some booleans to indicate our states and possible actions, but we did not really define them yet,
+in terms of when should it be off or on.
+if(check_car_lane == car_lane)
+              {
+                if(check_car_s > car_s && (check_car_s - car_s) < 30)
+                {
+                  keep_lane = false;
+                }
+              }
+              // if subtraction results in positive number, means car is on our left, we can not change lane, trigger false.
+              if(check_car_lane - car_lane == 1)
+              {
+                if((car_s - 30) < check_car_s && (car_s + 30) > check_car_s)
+                {
+                  left_lane_change = false;
+                }
+              }
+              // if subtraction results in negative number, means car is on our right, we can not change to right lane then, trigger false.
+              if(check_car_lane - car_lane == -1)
+              {
+                if((car_s - 30) < check_car_s && (car_s + 30) > check_car_s)
+                {
+                  right_lane_change = false;
+                }
+              }
+            }
+when can we keep lane ? we can keep lane if is there is no object/car ahead of us within 30 meters. but, what if there is one ? 
+what should happen ? 
+well, we check left lane, and we check it as follows, assume our car moved 30 meters ahead, will be there a car behind us ? 
+and if we moved 30 meters back, will be there a car infront of us ? 
+if the answer to both of em is yes, it means we can not shift lane to the left, because there is a car.
+switching the boolean off. 
+then we repeat same process for right lane state. however, what if we both lanes have false value ? indicating we can not 					switch to any of them ?
+well in this case, we just drive slower, till there is a possible action (lane change to be taken or when there is no longer 				traffic too close to us and we can just accelerate up again )
+            
+we need to make sure that, our car is always in middle lane, so our states should be more dynamic and flexible about which lane
+we in right now and get us to center when possible.
+            
+            //if we can not keep lane
+
+          if (keep_lane == false)
+          {
+            // if there's no car on our left, and we are not on far left lane
+            if (left_lane_change == true && car_lane < 2) 
+            {
+              // shift by one lane to left
+              car_lane = car_lane + 1 ;
+            } 
+            // if there's no car on our right, and we are not on far right lane
+            else if (right_lane_change == true && car_lane > 0)
+            {
+              // shift by one lane to right
+              car_lane = car_lane - 1;
+            }
+            else 
+            {
+              // slow down by acc(0.224) so long this condition exists;
+              // should not keep lane and can not shift lanes 
+              // keep lane but with lower speed
+              ref_vel = ref_vel - acc;
+            }
+          } 
+          else
+                {
+            // we want to be always in center lane
+            // Thus we put conditions to get us back to center
+            if (car_lane == 0 || car_lane == 2) {
+                  // if we on left lane, and there is no car to our right ( which is center lane )
+                  // shift by 1 lane to right
+              if (car_lane == 2 && right_lane_change == true)
+              {
+                car_lane = car_lane - 1;
+              }
+              // if we on right lane, and there is no car to our left ( which is center lane )
+              // shift by 1 lane to left
+              else if(car_lane == 0 && left_lane_change == true)
+              {
+                    car_lane = car_lane + 1;
+              }
+            }
+            // increase speed so long this condition exists 
+            if (ref_vel < max_vel) 
+            {
+              ref_vel = ref_vel + acc;
+            }
+              
+            }
+              
+in next steps, we define vectors which could store x,y coordinates of our waypoints, and we check if there is previous lane which we could just follow on with. otherwise we will use current car's state. 
+we set our waypoints 30 meters far from each other. 
+we want our path to have 50 waypoints, so we check for previous paths, did it have, for example, only 30 points ? 
+then we take these 30 points and add another 20 points to them, resulting in required and desired number of waypoints. 
+			vector<double> ptsx;
+			vector<double> ptsy;
+
+
+			double ref_x = car_x;
+			double ref_y = car_y;
+			double ref_yaw = deg2rad(car_yaw);
+
+
+          // if no prev_path_size is less than 2, means we do not have previous path
+          // use our current Car state instead
+			if (prev_path_size < 2)
+            {
+				double prev_car_x = car_x - cos(car_yaw);
+				double prev_car_y = car_y - sin(car_yaw);
+
+				ptsx.push_back(prev_car_x);
+				ptsx.push_back(car_x);
+
+				ptsy.push_back(prev_car_y);
+				ptsy.push_back(car_y);
+			} 
+          else 
+          {
+
+				ref_x = previous_path_x[prev_path_size-1];
+				ref_y = previous_path_y[prev_path_size-1];
+
+				double ref_x_prev = previous_path_x[prev_path_size-2];
+				double ref_y_prev = previous_path_y[prev_path_size-2];
+				ref_yaw = atan2(ref_y-ref_y_prev, ref_x-ref_x_prev);
+
+				ptsx.push_back(ref_x_prev);
+				ptsx.push_back(ref_x);
+
+				ptsy.push_back(ref_y_prev);
+				ptsy.push_back(ref_y);
+			}
+
+
+          // set our waypoints, 30 meter each
+			vector<double> next_wp0 = getXY(car_s+30, (2+4*car_lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector<double> next_wp1 = getXY(car_s+60, (2+4*car_lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector<double> next_wp2 = getXY(car_s+90, (2+4*car_lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+			ptsx.push_back(next_wp0[0]);
+			ptsx.push_back(next_wp1[0]);
+			ptsx.push_back(next_wp2[0]);
+
+			ptsy.push_back(next_wp0[1]);
+			ptsy.push_back(next_wp1[1]);
+			ptsy.push_back(next_wp2[1]);
+
+			for (int i = 0; i < ptsx.size(); i++)
+            {
+				double shift_x = ptsx[i] - ref_x;
+				double shift_y = ptsy[i] - ref_y;
+
+				ptsx[i] = (shift_x * cos(0-ref_yaw) - shift_y * sin(0-ref_yaw));
+				ptsy[i] = (shift_x * sin(0-ref_yaw) + shift_y * cos(0-ref_yaw));
+			}
+
+			// Create a spline called s
+			tk::spline s;
+
+
+			s.set_points(ptsx, ptsy);
+
+			vector<double> next_x_vals;
+			vector<double> next_y_vals;
+
+
+			for (int i = 0; i < previous_path_x.size(); i++) 
+            {
+				next_x_vals.push_back(previous_path_x[i]);
+				next_y_vals.push_back(previous_path_y[i]);
+			}
+
+
+			double target_x = 30.0;
+			double target_y = s(target_x);
+			double target_dist = sqrt((target_x)*(target_x) + (target_y)*(target_y));
+			double x_add_on = 0;
+
+			// Fill up the rest of the path planner to always output 50 points
+			for (int i = 1; i <= 50 - previous_path_x.size(); i++)
+            {
+				double N = (target_dist/(.02*ref_vel/2.24));
+				double x_point = x_add_on + (target_x) / N;
+				double y_point = s(x_point);
+
+				x_add_on = x_point;
+
+				double x_ref = x_point;
+				double y_ref = y_point;
+
+				// Rotate back to normal after rotating it earlier
+				x_point = (x_ref * cos(ref_yaw) - y_ref*sin(ref_yaw));
+				y_point = (x_ref * sin(ref_yaw) + y_ref*cos(ref_yaw));
+
+				x_point += ref_x;
+				y_point += ref_y;
+
+				next_x_vals.push_back(x_point);
+				next_y_vals.push_back(y_point);
+			}            
